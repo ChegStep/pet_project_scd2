@@ -79,7 +79,7 @@ def sync_dim_users() -> None:
             ;
         """))
 
-        # Шаг 4: Удаляем временную таблицу
+        # Шаг 4: Удаляем временную таблиц
         logger.info("Очистка временных данных")
         conn.execute(text("DROP TABLE IF EXISTS stg.tmp_users"))
 
