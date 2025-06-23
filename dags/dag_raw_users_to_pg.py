@@ -1,22 +1,42 @@
-import datetime
 import logging
+import pendulum
+from airflow import DAG
+import psycopg2
+from psycopg2 import sql
+from airflow.operators.empty import EmptyOperator
+from airflow.operators.python import PythonOperator
+import datetime
+from datetime import timedelta
 import random
-import time
 import uuid
 import pandas as pd
 from faker import Faker
 from sqlalchemy import create_engine, text
 
+OWNER = "tyopa"
+DAG_ID = "add_new_or_update_user"
+
+PG_HOST = "postgres_dwh"
+PG_PORT = 5432
+PG_DATABASE = "postgres"
+PG_USER = "postgres"
+PG_PASSWORD = "postgres"
 fake = Faker(locale="ru_RU")
 
-# Настройка логирования
+args = {
+    "owner": OWNER,
+    "start_date": pendulum.datetime(2025, 6, 10, tz="Europe/Moscow"),
+    "catchup": True,
+    "retries": 3,
+    "retry_delay": pendulum.duration(hours=1),
+}
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(levelname)s - %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
 )
 logger = logging.getLogger(__name__)
-
 
 def add_new_user() -> None:
     """
@@ -56,7 +76,7 @@ def add_new_user() -> None:
     df.to_sql(
         schema="raw",
         name="raw_users",
-        con="postgresql://postgres:postgres@localhost:5432/postgres",
+        con="postgresql://postgres:postgres@postgres_dwh:5432/postgres",
         if_exists="append",
         index=False,
     )
@@ -76,7 +96,7 @@ def update_info_about_current_user() -> None:
     :return: None
     """
     # Подключение к базе данных
-    db_url = "postgresql://postgres:postgres@localhost:5432/postgres"
+    db_url = "postgresql://postgres:postgres@postgres_dwh:5432/postgres"
     engine = create_engine(db_url)
 
     try:
@@ -144,11 +164,35 @@ def update_info_about_current_user() -> None:
     except Exception as e:  # noqa: BLE001
         logging.info(f"Ошибка при обновлении пользователя: {e}")
 
+def add_new_or_update_user():
+    count = 1
+    while count <= 100:
+        v = random.randint(a=1, b=100)  # noqa: S311
+        if v % 2 == 0:
+            add_new_user()
+        else:
+            update_info_about_current_user()
+        count += 1
 
-while True:
-    v = random.randint(a=1, b=100)  # noqa: S311
-    if v % 2 == 0:
-        add_new_user()
-    else:
-        update_info_about_current_user()
-    time.sleep(3)
+with DAG(
+        dag_id=DAG_ID,
+        schedule=timedelta(minutes=1),
+        default_args=args,
+        tags=["s3", "ods", "pg", "json"],
+        max_active_tasks=1,
+        max_active_runs=1,
+) as dag:
+
+    start = EmptyOperator(task_id="start")
+
+    add_new_or_update_user = PythonOperator(
+        task_id="add_new_or_update_user",
+        python_callable=add_new_or_update_user,
+    )
+
+    end = EmptyOperator(task_id="end")
+
+    start >> add_new_or_update_user >> end
+
+
+
